@@ -5,6 +5,7 @@ library(ggplot2)
 library(purrr)
 library(spdep)
 library(leaflet)
+#library(tmap)
 
 
 #Descargo las capas que necesito
@@ -127,6 +128,7 @@ tipo_vivienda  <- obtener_capa("gis:Censo_2022_Tipos_de_vivienda")
 hab_por_hogar  <- obtener_capa("gis:Censo_2022_Cantidad_de_habitantes_por_hogar")
 radios_censales  <- obtener_capa("gis:radios_censales")
 vivienda_inconv <- obtener_capa("gis:Censo_2022_NBI_Vivienda_tipo_inconveniente")
+ejido <- obtener_capa("gis:ejido")
 
 
 #Cargo las capas
@@ -135,7 +137,25 @@ escolaridad <- st_read("datos_gis/Censo_2022_NBI_Escolaridad.gpkg")
 empleo <- st_read("datos_gis/Censo_2022_Indices_de_empleo.gpkg")
 cober_salud <- st_read("datos_gis/Censo_2022_Cobertura_de_salud.gpkg")
 hacinamiento <- st_read("datos_gis/Censo_2022_NBI_Hacinamiento.gpkg")
+ejido <- st_read("datos_gis/ejido.gpkg")
 
+
+# 2. Creo función unificada de recorte urbano (Intersección + Área)
+recortar_urbano <- function(capa, limite) {
+  capa %>%
+    st_filter(limite, .predicate = st_intersects) %>%
+    mutate(area_km2 = as.numeric(st_area(.)) / 1e6) %>%
+    filter(area_km2 < 3) # Descarta los polígonos rurales extensos
+}
+
+# 3. Aplicar el filtro limpio a todas las capas iniciales
+escolaridad  <- recortar_urbano(escolaridad, ejido)
+empleo       <- recortar_urbano(empleo, ejido)
+cober_salud  <- recortar_urbano(cober_salud, ejido)
+hacinamiento <- recortar_urbano(hacinamiento, ejido)
+
+plot(st_geometry(ejido), border = "red", lwd = 2)
+plot(st_geometry(escolaridad), add = TRUE, col = "lightblue")
 
 #Armo el dataframe
 
@@ -321,17 +341,94 @@ ivs_tabla <- ivs_tabla %>%
     )
   )
 
+
+
+names(ivs_tabla)
+# Calculamos los quintiles de los puntajes z de las dimensiones
+
+obtener_rangos_cuantil <- function(x) {
+  # 1. Calcular percentiles de quintil
+  cortes <- quantile(x, probs = seq(0, 1, by = 0.2), na.rm = TRUE)
+  
+  # 2. Deduplicar cortes PRIMERO
+  cortes_unicos <- unique(cortes)
+  
+  # Control de seguridad si la variable casi no tiene variabilidad
+  if (length(cortes_unicos) < 2) {
+    return(as.factor(rep("Sin variación", length(x))))
+  }
+  
+  # 3. Redondear cortes únicos
+  cortes_redondos <- round(cortes_unicos, 2)
+  
+  # 4. Construir etiquetas ajustadas dinámicamente al número real de intervalos
+  etiquetas <- paste0(cortes_redondos[-length(cortes_redondos)], " a ", cortes_redondos[-1])
+  
+  # 5. Aplicar cut() de forma segura
+  cut(
+    x, 
+    breaks = cortes_unicos, 
+    include.lowest = TRUE,
+    labels = etiquetas
+  )
+}
+
+
+ivs_tabla <- ivs_tabla %>%
+  mutate(
+    across(
+      # 1. Seleccionás las columnas de tus dimensiones
+      c(z_educacion,z_empleo,z_hacinamiento,z_salud,z_infancia,z_infraestructura,IVS), 
+      
+      # 2. Aplicás la función de quintiles (el punto '.' representa cada columna)
+      obtener_rangos_cuantil, 
+      
+      # 3. Le das un sufijo a las columnas nuevas para no sobrescribir las originales
+      .names = "{.col}_quintil" 
+    )
+  )
+
+
+
 # ==============================================================================
 # 4. UNIÓN CON LA CAPA VECTORIAL BASE (RADIOS CENSALES)
 # ==============================================================================
 radios_gchu_sf <- st_read("datos_gis/radios_censales.gpkg") %>%
 mutate(
     cod_indec = sprintf("30056%02d%02d", as.numeric(fraccion), as.numeric(radio))
-  )
+  ) %>%
+  st_filter(ejido, .predicate = st_intersects)
 
 ivs_gchu_sf <- radios_gchu_sf %>%
   inner_join(st_drop_geometry(ivs_tabla), by = "cod_indec")
 
+plot(st_geometry(ejido), border = "red", lwd = 2)
+plot(st_geometry(ivs_gchu_sf), add = TRUE, col = "lightblue")
+
+ivs_gchu_urbano_sf <- radios_gchu_sf %>%
+  st_filter(ejido, .predicate = st_intersects) %>%
+  # Calcular área en km2
+  mutate(area_km2 = as.numeric(st_area(.)) / 1e6) %>%
+  # Conservar solo los radios urbanos (menores a 3 km2)
+  filter(area_km2 < 3) %>% 
+  inner_join(st_drop_geometry(ivs_tabla), by = "cod_indec")
+
+plot(st_geometry(ivs_gchu_urbano_sf), col = "lightblue", border = "black")
+radios_omitidos <- setdiff(ivs_tabla$cod_indec, ivs_gchu_urbano_sf$cod_indec)
+
+cat("Cantidad de radios de la tabla que no están en el mapa urbano:", length(radios_omitidos), "\n")
+
+# Filtrar las geometrías de los 91 radios omitidos
+radios_omitidos_sf <- radios_gchu_sf %>%
+  filter(cod_indec %in% radios_omitidos)
+
+# 1. Ver qué fracciones censales quedaron fuera
+# (Las fracciones urbanas de Gualeguaychú suelen ser las primeras; las más altas son rurales/departamento)
+table(radios_omitidos_sf$fraccion)
+
+# 2. Mapear rápidamente los radios omitidos en rojo junto a la mancha urbana en azul
+plot(st_geometry(radios_omitidos_sf), col = "salmon", border = "red")
+plot(st_geometry(ivs_gchu_urbano_sf), col = "lightblue", add = TRUE)
 # ==============================================================================
 # 5. INSPECCIÓN RESUMEN DEL ÍNDICE
 # ==============================================================================
@@ -471,54 +568,73 @@ ivs_lisa <- ivs_gchu_sf %>%
 # Resumen de frecuencias por conglomerado
 table(ivs_lisa$cluster)
 
-# Armamos el mapa
+ivs_lisa_4326 <- st_transform(ivs_lisa, 4326)
 
-
-# 1. Calcular el punto interno sobre la capa proyectada en metros
 centroides_proyectados <- st_point_on_surface(ivs_lisa)
-
-# 2. Transformar únicamente los puntos a WGS84 para Leaflet
 centroides_sf <- st_transform(centroides_proyectados, 4326)
 
-# 3. Generar las líneas de vecindad conectando los puntos corregidos
 lineas_vecindad <- nb2lines(vecinos, coords = st_coordinates(centroides_sf), as_sf = TRUE)
-st_crs(lineas_vecindad) <- 4326
+lineas_vecindad <- st_set_crs(lineas_vecindad, 4326)
 
-# 3. Paleta cromática epidemiológica para los clústeres LISA
+# 5. Paletas cromáticas
 pal_lisa <- leaflet::colorFactor(
   palette = c(
-    "Alto-Alto"        = "#d7191c", # Rojo - Hotspot de alto riesgo
-    "Bajo-Bajo"        = "#2b83ba", # Azul - Coldspot de bajo riesgo
-    "Alto-Bajo"        = "#fdae61", # Naranja - Atípico
-    "Bajo-Alto"        = "#abdda4", # Verde - Atípico
-    "No significativo" = "#f0f0f0"  # Gris claro
+    "Alto-Alto"        = "#d7191c",
+    "Bajo-Bajo"        = "#2b83ba",
+    "Alto-Bajo"        = "#fdae61",
+    "Bajo-Alto"        = "#abdda4",
+    "No significativo" = "#f0f0f0"
   ),
   domain = ivs_lisa_4326$cluster
 )
 
-# 4. Construcción del Mapa Interactivo Consolidado
-geo_gchu <- "https://geo.gualeguaychu.gov.ar/geoserver/wms"
+pal_quintil <- leaflet::colorFactor(palette = "YlOrRd", domain = NULL)
 
-# Reemplazar addWMS() por addWMSTiles() en cada capa
-mapa_lisa_nodos <- leaflet() %>%
+# 6. Identificación de capas de quintiles para el mapa
+columnas_q <- names(ivs_lisa_4326)[grep("_quintil$", names(ivs_lisa_4326))]
+
+# 7. Ensamblado del Mapa Interactivo
+mapa_completo <- leaflet() %>%
   addTiles(
     urlTemplate = "https://wms.ign.gob.ar/geoserver/gwc/service/tms/1.0.0/mapabase_gris@EPSG%3A3857@png/{z}/{x}/{-y}.png",
     options = tileOptions(tms = TRUE, maxZoom = 18),
     group = "Argenmap Base"
   ) %>%
   
-  # Capa 1: Polígonos LISA
+  # Capa Polígonos LISA
   addPolygons(
     data = ivs_lisa_4326,
     fillColor = ~pal_lisa(cluster),
     fillOpacity = 0.6,
     color = "#444444",
     weight = 1,
-    popup = ~paste0("<b>Radio: </b>", cod_indec, "<br><b>LISA: </b>", cluster),
+    popup = ~paste0("<b>Radio: </b>", cod_indec, "<br><b>Clúster LISA: </b>", cluster),
     group = "Clusters LISA"
-  ) %>%
+  )
+
+# Agregar cada dimensión por quintiles mediante bucle
+for (col in columnas_q) {
+  nombre_capa <- paste0("Quintiles: ", gsub("_quintil", "", col) %>% gsub("z_", "", .) %>% toupper())
   
-  # Capa 2: Aristas / Enlaces de Vecindad
+  mapa_completo <- mapa_completo %>%
+    addPolygons(
+      data = ivs_lisa_4326,
+      fillColor = ~pal_quintil(get(col)),
+      fillOpacity = 0.7,
+      color = "#444444",
+      weight = 1,
+      popup = ~paste0(
+        "<b>Radio: </b>", cod_indec, "<br>",
+        "<b>", nombre_capa, ": </b>", get(col)
+      ),
+      group = nombre_capa
+    )
+}
+
+# Agregar red espacial, centroides y control de capas
+nombres_capas_q <- paste0("Quintiles: ", gsub("_quintil", "", columnas_q) %>% gsub("z_", "", .) %>% toupper())
+
+mapa_completo <- mapa_completo %>%
   addPolylines(
     data = lineas_vecindad,
     color = "#333333",
@@ -527,8 +643,6 @@ mapa_lisa_nodos <- leaflet() %>%
     dashArray = "3,3",
     group = "Red de Vecindad (W)"
   ) %>%
-  
-  # Capa 3: NODOS / Centroides explícitos
   addCircleMarkers(
     data = centroides_sf,
     radius = 4,
@@ -539,13 +653,52 @@ mapa_lisa_nodos <- leaflet() %>%
     popup = ~paste0("<b>Centroide Radio: </b>", cod_indec),
     group = "Nodos (Centroides)"
   ) %>%
-  
-  # Control de Capas
   addLayersControl(
     baseGroups = c("Argenmap Base"),
-    overlayGroups = c("Clusters LISA", "Red de Vecindad (W)", "Nodos (Centroides)"),
-    options = layersControlOptions(collapsed = FALSE)
+    overlayGroups = c("Clusters LISA", nombres_capas_q, "Red de Vecindad (W)", "Nodos (Centroides)"),
+    options = layersControlOptions(collapsed = TRUE)
   ) %>%
   setView(lng = -58.515, lat = -33.008, zoom = 12)
 
-mapa_lisa_nodos
+mapa_completo <- mapa_completo %>%
+  # Leyenda 1: Clústeres LISA
+  addLegend(
+    pal = pal_lisa,
+    values = ivs_lisa_4326$cluster,
+    title = "Clústeres LISA",
+    position = "bottomleft",
+    opacity = 0.8
+  ) %>%
+  # Leyenda 2: Escala General de Quintiles
+  addLegend(
+    colors = RColorBrewer::brewer.pal(5, "YlOrRd"),
+    labels = c("Q1 (Menor)", "Q2", "Q3", "Q4", "Q5 (Mayor)"),
+    title = "Nivel de Quintil",
+    position = "bottomright",
+    opacity = 0.8
+  )
+
+mapa_completo
+
+install.packages("tmap")
+library(tmap)
+
+# Configurar tmap en modo estático (plot)
+tmap_mode("plot")
+
+# Crear el mapa multipanel estático estilo Buzai
+mapa_grid <- tm_shape(ivs_lisa) +
+  tm_polygons(
+    col = c("z_educacion_quintil", "z_empleo_quintil", 
+            "z_hacinamiento_quintil", "z_salud_quintil", 
+            "z_infancia_quintil", "z_infraestructura_quintil"),
+    palette = "YlOrRd",
+    title = "Quintiles",
+    border.col = "grey40",
+    lwd = 0.5
+  ) +
+  tm_facets(ncol = 2) + # 2 columnas x 3 filas (igual a la imagen de Buzai)
+  tm_layout(
+    legend.position = c("right", "bottom"),
+    frame = FALSE
+  )
