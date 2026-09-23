@@ -5,6 +5,8 @@ library(ggplot2)
 library(purrr)
 library(spdep)
 library(leaflet)
+library(units)
+
 #library(tmap)
 
 
@@ -142,10 +144,16 @@ ejido <- st_read("datos_gis/ejido.gpkg")
 
 # 2. Creo función unificada de recorte urbano (Intersección + Área)
 recortar_urbano <- function(capa, limite) {
+  # Asegurar que ambas capas compartan CRS
+  limite_crs <- st_transform(limite, st_crs(capa))
+  
   capa %>%
-    st_filter(limite, .predicate = st_intersects) %>%
-    mutate(area_km2 = as.numeric(st_area(.)) / 1e6) %>%
-    filter(area_km2 < 3) # Descarta los polígonos rurales extensos
+    st_filter(limite_crs, .predicate = st_intersects) %>%
+    # st_area calculará el área real y set_units la convertirá estrictamente a km2
+    mutate(area_km2 = as.numeric(units::set_units(st_area(.), "km^2"))) %>%
+    filter(area_km2 < 3) %>%
+    # Opcional: Eliminar la columna de área si ya no sirve
+    select(-area_km2)
 }
 
 # 3. Aplicar el filtro limpio a todas las capas iniciales
@@ -155,7 +163,7 @@ cober_salud  <- recortar_urbano(cober_salud, ejido)
 hacinamiento <- recortar_urbano(hacinamiento, ejido)
 
 plot(st_geometry(ejido), border = "red", lwd = 2)
-plot(st_geometry(escolaridad), add = TRUE, col = "lightblue")
+plot(st_geometry(hacinamiento), add = TRUE, col = "lightblue")
 
 #Armo el dataframe
 
@@ -342,7 +350,6 @@ ivs_tabla <- ivs_tabla %>%
   )
 
 
-
 names(ivs_tabla)
 # Calculamos los quintiles de los puntajes z de las dimensiones
 
@@ -388,51 +395,9 @@ ivs_tabla <- ivs_tabla %>%
     )
   )
 
+plot(ivs_tabla$geom,col = "lightblue", border = "black")
 
 
-# ==============================================================================
-# 4. UNIÓN CON LA CAPA VECTORIAL BASE (RADIOS CENSALES)
-# ==============================================================================
-radios_gchu_sf <- st_read("datos_gis/radios_censales.gpkg") %>%
-mutate(
-    cod_indec = sprintf("30056%02d%02d", as.numeric(fraccion), as.numeric(radio))
-  ) %>%
-  st_filter(ejido, .predicate = st_intersects)
-
-ivs_gchu_sf <- radios_gchu_sf %>%
-  inner_join(st_drop_geometry(ivs_tabla), by = "cod_indec")
-
-plot(st_geometry(ejido), border = "red", lwd = 2)
-plot(st_geometry(ivs_gchu_sf), add = TRUE, col = "lightblue")
-
-ivs_gchu_urbano_sf <- radios_gchu_sf %>%
-  st_filter(ejido, .predicate = st_intersects) %>%
-  # Calcular área en km2
-  mutate(area_km2 = as.numeric(st_area(.)) / 1e6) %>%
-  # Conservar solo los radios urbanos (menores a 3 km2)
-  filter(area_km2 < 3) %>% 
-  inner_join(st_drop_geometry(ivs_tabla), by = "cod_indec")
-
-plot(st_geometry(ivs_gchu_urbano_sf), col = "lightblue", border = "black")
-radios_omitidos <- setdiff(ivs_tabla$cod_indec, ivs_gchu_urbano_sf$cod_indec)
-
-cat("Cantidad de radios de la tabla que no están en el mapa urbano:", length(radios_omitidos), "\n")
-
-# Filtrar las geometrías de los 91 radios omitidos
-radios_omitidos_sf <- radios_gchu_sf %>%
-  filter(cod_indec %in% radios_omitidos)
-
-# 1. Ver qué fracciones censales quedaron fuera
-# (Las fracciones urbanas de Gualeguaychú suelen ser las primeras; las más altas son rurales/departamento)
-table(radios_omitidos_sf$fraccion)
-
-# 2. Mapear rápidamente los radios omitidos en rojo junto a la mancha urbana en azul
-plot(st_geometry(radios_omitidos_sf), col = "salmon", border = "red")
-plot(st_geometry(ivs_gchu_urbano_sf), col = "lightblue", add = TRUE)
-# ==============================================================================
-# 5. INSPECCIÓN RESUMEN DEL ÍNDICE
-# ==============================================================================
-summary(ivs_gchu_sf$IVS)
 
 
 ##%######################################################%##
@@ -441,13 +406,10 @@ summary(ivs_gchu_sf$IVS)
 #                                                          #
 ##%######################################################%##
 
-library(dplyr)
-library(sf)
-library(ggplot2)
-library(purrr)
+
 
 # 1. Cálculo de superficie por radio (s_i)
-mapa_ice <- ivs_gchu_sf %>%
+mapa_ice <- ivs_tabla %>%
   mutate(
     sup_m2 = as.numeric(st_area(.)),
     s_i = (sup_m2 / sum(sup_m2, na.rm = TRUE)) * 100
@@ -536,18 +498,18 @@ print(cuadro2_gchu)
 
 
 # 1. Matriz de Vecindad (Criterio Reina / Queen)
-vecinos <- poly2nb(ivs_gchu_sf, queen = TRUE)
+vecinos <- poly2nb(ivs_tabla, queen = TRUE)
 weights <- nb2listw(vecinos, style = "W", zero.policy = TRUE)
 
 # 2. Test de Moran Global
-moran_global <- moran.test(ivs_gchu_sf$IVS, weights, zero.policy = TRUE)
+moran_global <- moran.test(ivs_tabla$IVS, weights, zero.policy = TRUE)
 print(moran_global)
 
 # 3. Cálculo de LISA Local
-local_m <- localmoran(ivs_gchu_sf$IVS, weights, zero.policy = TRUE)
+local_m <- localmoran(ivs_tabla$IVS, weights, zero.policy = TRUE)
 
 # 4. Construcción del Cuadrante LISA y Recategorización
-ivs_lisa <- ivs_gchu_sf %>%
+ivs_lisa <- ivs_tabla %>%
   mutate(
     z_ivs = as.numeric(scale(IVS)),
     lag_z_ivs = as.numeric(lag.listw(weights, z_ivs, zero.policy = TRUE)),
