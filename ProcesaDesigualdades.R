@@ -7,7 +7,6 @@ library(spdep)
 library(leaflet)
 library(units)
 
-#library(tmap)
 
 
 #Descargo las capas que necesito
@@ -131,6 +130,7 @@ hab_por_hogar  <- obtener_capa("gis:Censo_2022_Cantidad_de_habitantes_por_hogar"
 radios_censales  <- obtener_capa("gis:radios_censales")
 vivienda_inconv <- obtener_capa("gis:Censo_2022_NBI_Vivienda_tipo_inconveniente")
 ejido <- obtener_capa("gis:ejido")
+planta_urbana <- obtener_capa("gis:planta_urbana")
 
 
 #Cargo las capas
@@ -139,30 +139,29 @@ escolaridad <- st_read("datos_gis/Censo_2022_NBI_Escolaridad.gpkg")
 empleo <- st_read("datos_gis/Censo_2022_Indices_de_empleo.gpkg")
 cober_salud <- st_read("datos_gis/Censo_2022_Cobertura_de_salud.gpkg")
 hacinamiento <- st_read("datos_gis/Censo_2022_NBI_Hacinamiento.gpkg")
-ejido <- st_read("datos_gis/ejido.gpkg")
+planta_urbana <- st_read("datos_gis/planta_urbana.gpkg")
 
+
+escolaridad <- escolaridad %>%
+  st_filter(planta_urbana, .predicate = st_intersects)
 
 # 2. Creo función unificada de recorte urbano (Intersección + Área)
 recortar_urbano <- function(capa, limite) {
-  # Asegurar que ambas capas compartan CRS
+  # Reproyectar el límite al CRS de la capa para evitar desacoples
   limite_crs <- st_transform(limite, st_crs(capa))
   
+  # Filtrar espacialmente por intersección con la planta urbana
   capa %>%
-    st_filter(limite_crs, .predicate = st_intersects) %>%
-    # st_area calculará el área real y set_units la convertirá estrictamente a km2
-    mutate(area_km2 = as.numeric(units::set_units(st_area(.), "km^2"))) %>%
-    filter(area_km2 < 3) %>%
-    # Opcional: Eliminar la columna de área si ya no sirve
-    select(-area_km2)
+    st_filter(limite_crs, .predicate = st_intersects)
 }
 
 # 3. Aplicar el filtro limpio a todas las capas iniciales
-escolaridad  <- recortar_urbano(escolaridad, ejido)
-empleo       <- recortar_urbano(empleo, ejido)
-cober_salud  <- recortar_urbano(cober_salud, ejido)
-hacinamiento <- recortar_urbano(hacinamiento, ejido)
+escolaridad  <- recortar_urbano(escolaridad, planta_urbana)
+empleo       <- recortar_urbano(empleo, planta_urbana)
+cober_salud  <- recortar_urbano(cober_salud, planta_urbana)
+hacinamiento <- recortar_urbano(hacinamiento, planta_urbana)
 
-plot(st_geometry(ejido), border = "red", lwd = 2)
+plot(st_geometry(planta_urbana), border = "red", lwd = 2)
 plot(st_geometry(hacinamiento), add = TRUE, col = "lightblue")
 
 #Armo el dataframe
@@ -351,53 +350,40 @@ ivs_tabla <- ivs_tabla %>%
 
 
 names(ivs_tabla)
-# Calculamos los quintiles de los puntajes z de las dimensiones
+# Agrupamos los puntajes z de las dimensiones
 
-obtener_rangos_cuantil <- function(x) {
-  # 1. Calcular percentiles de quintil
-  cortes <- quantile(x, probs = seq(0, 1, by = 0.2), na.rm = TRUE)
-  
-  # 2. Deduplicar cortes PRIMERO
-  cortes_unicos <- unique(cortes)
-  
-  # Control de seguridad si la variable casi no tiene variabilidad
-  if (length(cortes_unicos) < 2) {
-    return(as.factor(rep("Sin variación", length(x))))
-  }
-  
-  # 3. Redondear cortes únicos
-  cortes_redondos <- round(cortes_unicos, 2)
-  
-  # 4. Construir etiquetas ajustadas dinámicamente al número real de intervalos
-  etiquetas <- paste0(cortes_redondos[-length(cortes_redondos)], " a ", cortes_redondos[-1])
-  
-  # 5. Aplicar cut() de forma segura
+obtener_rangos_puntaje_z <- function(x) {
   cut(
-    x, 
-    breaks = cortes_unicos, 
-    include.lowest = TRUE,
-    labels = etiquetas
+    x,
+    breaks = c(-Inf, -1.0, -0.5, 0.5, 1.0, Inf),
+    labels = c(
+      "1. Muy Bajo (< -1.0)",
+      "2. Bajo (-1.0 a -0.5)",
+      "3. Medio (-0.5 a 0.5)",
+      "4. Alto (0.5 a 1.0)",
+      "5. Muy Alto (> 1.0)"
+    ),
+    include.lowest = TRUE
   )
 }
-
 
 ivs_tabla <- ivs_tabla %>%
   mutate(
     across(
-      # 1. Seleccionás las columnas de tus dimensiones
-      c(z_educacion,z_empleo,z_hacinamiento,z_salud,z_infancia,z_infraestructura,IVS), 
+      # 1. Columnas estandarizadas a clasificar
+      c(z_educacion, z_empleo, z_hacinamiento, z_salud, z_infancia, z_infraestructura, IVS), 
       
-      # 2. Aplicás la función de quintiles (el punto '.' representa cada columna)
-      obtener_rangos_cuantil, 
+      # 2. Aplicación de categorías teóricas de Puntaje Z (Buzai)
+      obtener_rangos_puntaje_z, 
       
-      # 3. Le das un sufijo a las columnas nuevas para no sobrescribir las originales
-      .names = "{.col}_quintil" 
+      # 3. Sufijo indicativo de categoría/nivel
+      .names = "{.col}_cat" 
     )
   )
 
 plot(ivs_tabla$geom,col = "lightblue", border = "black")
 
-
+ivs_tabla$z_educacion_cat
 
 
 ##%######################################################%##
@@ -572,32 +558,7 @@ mapa_completo <- leaflet() %>%
     weight = 1,
     popup = ~paste0("<b>Radio: </b>", cod_indec, "<br><b>Clúster LISA: </b>", cluster),
     group = "Clusters LISA"
-  )
-
-# Agregar cada dimensión por quintiles mediante bucle
-for (col in columnas_q) {
-  nombre_capa <- paste0("Quintiles: ", gsub("_quintil", "", col) %>% gsub("z_", "", .) %>% toupper())
-  
-  mapa_completo <- mapa_completo %>%
-    addPolygons(
-      data = ivs_lisa_4326,
-      fillColor = ~pal_quintil(get(col)),
-      fillOpacity = 0.7,
-      color = "#444444",
-      weight = 1,
-      popup = ~paste0(
-        "<b>Radio: </b>", cod_indec, "<br>",
-        "<b>", nombre_capa, ": </b>", get(col)
-      ),
-      group = nombre_capa
-    )
-}
-
-# Agregar red espacial, centroides y control de capas
-nombres_capas_q <- paste0("Quintiles: ", gsub("_quintil", "", columnas_q) %>% gsub("z_", "", .) %>% toupper())
-
-mapa_completo <- mapa_completo %>%
-  addPolylines(
+  ) %>% addPolylines(
     data = lineas_vecindad,
     color = "#333333",
     weight = 1.2,
@@ -617,50 +578,44 @@ mapa_completo <- mapa_completo %>%
   ) %>%
   addLayersControl(
     baseGroups = c("Argenmap Base"),
-    overlayGroups = c("Clusters LISA", nombres_capas_q, "Red de Vecindad (W)", "Nodos (Centroides)"),
+    overlayGroups = c("Clusters LISA", "Red de Vecindad (W)", "Nodos (Centroides)"),
     options = layersControlOptions(collapsed = TRUE)
   ) %>%
   setView(lng = -58.515, lat = -33.008, zoom = 12)
 
-mapa_completo <- mapa_completo %>%
-  # Leyenda 1: Clústeres LISA
-  addLegend(
-    pal = pal_lisa,
-    values = ivs_lisa_4326$cluster,
-    title = "Clústeres LISA",
-    position = "bottomleft",
-    opacity = 0.8
-  ) %>%
-  # Leyenda 2: Escala General de Quintiles
-  addLegend(
-    colors = RColorBrewer::brewer.pal(5, "YlOrRd"),
-    labels = c("Q1 (Menor)", "Q2", "Q3", "Q4", "Q5 (Mayor)"),
-    title = "Nivel de Quintil",
-    position = "bottomright",
-    opacity = 0.8
-  )
-
 mapa_completo
 
-install.packages("tmap")
-library(tmap)
 
-# Configurar tmap en modo estático (plot)
-tmap_mode("plot")
+names(ivs_tabla)
 
-# Crear el mapa multipanel estático estilo Buzai
-mapa_grid <- tm_shape(ivs_lisa) +
-  tm_polygons(
-    col = c("z_educacion_quintil", "z_empleo_quintil", 
-            "z_hacinamiento_quintil", "z_salud_quintil", 
-            "z_infancia_quintil", "z_infraestructura_quintil"),
-    palette = "YlOrRd",
-    title = "Quintiles",
-    border.col = "grey40",
-    lwd = 0.5
+# Armo los mapas para las dimensiones
+
+dimensiones <- c("z_educacion_cat","z_empleo_cat","z_hacinamiento_cat","z_salud_cat",
+                 "z_infancia_cat" ,"z_infraestructura_cat","IVS_cat")
+
+names <- c("Educacion","Empleo","Hacinamiento","Salud","Infancia","Infraestructura","IVS")
+
+mapas <- list()
+
+
+for (d in 1:length(dimensiones)){
+print(d)
+  
+mapas[[d]] <- ggplot(ivs_tabla) +
+  geom_sf(aes(fill = .data[[dimensiones[d]]]), color = "white", linewidth = 0.08) +
+  scale_fill_brewer(
+    palette = "YlOrRd", # Paleta ColorBrewer: Amarillo (Q1) -> Naranja -> Rojo (Q5)
+    direction = 1,
+    name = names[d],
+    drop = FALSE
   ) +
-  tm_facets(ncol = 2) + # 2 columnas x 3 filas (igual a la imagen de Buzai)
-  tm_layout(
-    legend.position = c("right", "bottom"),
-    frame = FALSE
+  #labs(title = titulo) +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 11),
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9)
   )
+}
+
+mapas[[7]]
