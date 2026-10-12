@@ -381,9 +381,38 @@ ivs_tabla <- ivs_tabla %>%
     )
   )
 
-plot(ivs_tabla$geom,col = "lightblue", border = "black")
+
+# Armo un mapa de los radios urbanos
+
+mapa_1 <- ggplot(ivs_tabla) +
+  geom_sf(aes(fill = cod_indec), color = "white", linewidth = 0.08,show.legend = F) +
+  #labs() +
+  theme_void() +
+  labs(title= "Mapa de las 137 fracciones censales luego del filtro (capa urbana)",
+    caption= "Fuente: elaboracion propia a partir de los datos obtenidos del SIG de Gualeguaychú.")+
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 11),
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9),
+    plot.caption = element_text(hjust = 0), # 0 = Izquierda, 0.5 = Centro, 1 = Derecha
+    plot.caption.position = "plot" 
+  )
+
+
+ggsave(
+  filename = "Resultados/mapa_fracciones_censales_gchu_1.png",
+  plot = mapa_1,
+  width = 8,        # Ancho en pulgadas
+  height = 6,       # Alto en pulgadas
+  units = "in",
+  dpi = 300,        # Resolución alta
+  bg = "white"      # Asegura fondo blanco en el PNG
+)
+
 
 ivs_tabla$z_educacion_cat
+
+ggplot
 
 
 ##%######################################################%##
