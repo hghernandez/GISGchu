@@ -6,7 +6,7 @@ library(purrr)
 library(spdep)
 library(leaflet)
 library(units)
-
+library(leaflet.extras2)
 
 
 #Descargo las capas que necesito
@@ -140,10 +140,66 @@ empleo <- st_read("datos_gis/Censo_2022_Indices_de_empleo.gpkg")
 cober_salud <- st_read("datos_gis/Censo_2022_Cobertura_de_salud.gpkg")
 hacinamiento <- st_read("datos_gis/Censo_2022_NBI_Hacinamiento.gpkg")
 planta_urbana <- st_read("datos_gis/planta_urbana.gpkg")
+poblacion <- st_read("datos_gis/Censo_2022_Poblacion_en_grupos_quinquenales.gpkg")
+
+#Descripcion de los totales pre-recorte
+
+poblacion %>%
+  st_drop_geometry() %>%
+  mutate(
+    cod_indec = as.character(cod_indec),
+    
+    # Limpieza de NAs en las columnas de grupos de edad (empiezan con X)
+    across(starts_with("X"), ~ replace_na(as.numeric(.), 0)),
+    
+    # Suma total de población calculada desde las franjas quinquenales
+    pob_total = rowSums(pick(starts_with("X"))),
+  
+  ) %>%
+  summarise(pob_tot = sum(pob_total)) %>%
+  bind_cols(poblacion %>%
+              st_filter(planta_urbana, .predicate = st_intersects)%>%
+              st_drop_geometry() %>%
+              mutate(
+                cod_indec = as.character(cod_indec),
+                
+                # Limpieza de NAs en las columnas de grupos de edad (empiezan con X)
+                across(starts_with("X"), ~ replace_na(as.numeric(.), 0)),
+                
+                # Suma total de población calculada desde las franjas quinquenales
+                pob_total = rowSums(pick(starts_with("X"))),
+                
+              ) %>%
+              summarise(pob_urb = sum(pob_total))) %>%
+  mutate(porc = pob_urb*100/pob_tot)
 
 
-escolaridad <- escolaridad %>%
-  st_filter(planta_urbana, .predicate = st_intersects)
+
+escolaridad %>%
+  st_drop_geometry() %>%
+  summarise(tot_hog = sum(Si)+sum(No)) %>%
+  bind_cols(escolaridad %>%
+              st_filter(planta_urbana, .predicate = st_intersects) %>%
+              st_drop_geometry() %>%
+              summarise(tot_hog_urb = sum(Si)+sum(No))) %>%
+  mutate(porc = tot_hog_urb*100/tot_hog)
+
+poblacion %>%
+  mutate(
+    sup_m2 = as.numeric(st_area(.)))%>%
+  st_drop_geometry()%>%
+  summarise(tot_area= sum(sup_m2)) %>%
+  bind_cols(
+    poblacion %>%
+      st_filter(planta_urbana, .predicate = st_intersects) %>%
+        mutate(
+        sup_m2 = as.numeric(st_area(.)))%>%
+      st_drop_geometry()%>%
+      summarise(tot_area_urb= sum(sup_m2))) %>%
+  mutate(porc = tot_area_urb*100/tot_area)
+
+
+
 
 # 2. Creo función unificada de recorte urbano (Intersección + Área)
 recortar_urbano <- function(capa, limite) {
@@ -164,6 +220,36 @@ hacinamiento <- recortar_urbano(hacinamiento, planta_urbana)
 plot(st_geometry(planta_urbana), border = "red", lwd = 2)
 plot(st_geometry(hacinamiento), add = TRUE, col = "lightblue")
 
+plot(st_geometry(hacinamiento), col = "lightblue")
+
+
+
+geo_gchu <- "https://geo.gualeguaychu.gov.ar/geoserver/wms"
+
+
+
+leaflet() %>%
+  # Base Map: Argenmap Gris
+  addTiles(
+    urlTemplate = "https://wms.ign.gob.ar/geoserver/gwc/service/tms/1.0.0/mapabase_gris@EPSG%3A3857@png/{z}/{x}/{-y}.png",
+    options = tileOptions(tms = TRUE, maxZoom = 18),
+    attribution = '<a target="_blank" href="https://www.ign.gob.ar">IGN Argentina</a> // OpenStreetMap',
+    group = "Argenmap"
+  ) %>%
+  
+  # Capa WMS 1: NBI Censo 2022
+  addWMS(
+    baseUrl = geo_gchu,
+    layers = "gis:Censo_2022_NBI",
+    options = WMSTileOptions(
+      format = "image/png", 
+      transparent = TRUE, 
+      info_format = "text/html"
+    ),
+    group = "Censo NBI 2022"
+  ) %>%
+  setView(lng = -58.515, lat = -33.008, zoom = 12)
+  
 #Armo el dataframe
 
 escolaridad_hogares_pct <- escolaridad %>%
@@ -297,6 +383,8 @@ dim_edad <- poblacion %>%
 
 
 
+
+
 # ==============================================================================
 # 1. UNIFICACIÓN TABULAR (LEFT JOIN)
 # ==============================================================================
@@ -388,8 +476,8 @@ mapa_1 <- ggplot(ivs_tabla) +
   geom_sf(aes(fill = cod_indec), color = "white", linewidth = 0.08,show.legend = F) +
   #labs() +
   theme_void() +
-  labs(title= "Mapa de las 137 fracciones censales luego del filtro (capa urbana)",
-    caption= "Fuente: elaboracion propia a partir de los datos obtenidos del SIG de Gualeguaychú.")+
+  #labs(title= "Mapa de los 137 radios censales luego del filtro (capa urbana)",
+    #caption= "Fuente: elaboracion propia a partir de los datos obtenidos del SIG de Gualeguaychú.")+
   theme(
     plot.title = element_text(hjust = 0.5, face = "bold", size = 11),
     legend.title = element_text(size = 10, face = "bold"),
@@ -400,7 +488,7 @@ mapa_1 <- ggplot(ivs_tabla) +
 
 
 ggsave(
-  filename = "Resultados/mapa_fracciones_censales_gchu_1.png",
+  filename = "Resultados/mapa_radios_censales_gchu_1.png",
   plot = mapa_1,
   width = 8,        # Ancho en pulgadas
   height = 6,       # Alto en pulgadas
@@ -409,10 +497,6 @@ ggsave(
   bg = "white"      # Asegura fondo blanco en el PNG
 )
 
-
-ivs_tabla$z_educacion_cat
-
-ggplot
 
 
 ##%######################################################%##
