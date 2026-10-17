@@ -198,7 +198,58 @@ poblacion %>%
       summarise(tot_area_urb= sum(sup_m2))) %>%
   mutate(porc = tot_area_urb*100/tot_area)
 
+# Mapa 1 para dimensionar el area urbana vs el ejido
 
+# Armo un mapa de los radios urbanos
+
+mapa_1 <- ggplot() +
+  # 1. Ejido municipal completo con relleno gris claro neutro
+  geom_sf(
+    data = st_union(escolaridad),
+    fill = "#f0f0f0",
+    color = "#555555",
+    linewidth = 0.5,
+    aes(shape = "Ejido municipal"),
+    show.legend = F
+  ) +
+  
+  # 2. Planta urbana con color unificado y borde fino blanco
+  geom_sf(
+    data = planta_urbana,
+    fill = "#2b5c8f",
+    color = "white",
+    linewidth = 0.05
+  ) +
+
+  # 5. Títulos y Fuentes (Norma Editorial)
+  labs(
+    fill= NULL,
+    title = "Figura 1. Delimitación de la planta urbana dentro del ejido municipal de Gualeguaychú",
+    subtitle = "Cobertura espacial de los 137 radios censales analizados (Censo 2022)",
+    caption = "Fuente: Elaboración propia a partir de microdatos del Censo 2022 (INDEC) y la Infraestructura de Datos Espaciales (IDE) del\nMunicipio de Gualeguaychú."
+    ) +
+  
+  # 6. Tema académico limpio
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 11, hjust = 0),
+    plot.subtitle = element_text(size = 9, color = "gray30", hjust = 0),
+    plot.caption = element_text(size = 8, color = "gray40", hjust = 0, margin = margin(t = 10)),
+    axis.text = element_text(size = 7, color = "gray40"), # Muestra las coordenadas geográficas en los ejes
+    axis.title = element_blank(),
+    panel.grid = element_line(color = "gray90", linetype = "dashed", linewidth = 0.2),
+    panel.background = element_rect(fill = "white", color = NA)
+  )
+
+ggsave(
+  filename = "Resultados/mapa_radios_censales_gchu_1_vs_ejido.png",
+  plot = mapa_1,
+  width = 8,        # Ancho en pulgadas
+  height = 6,       # Alto en pulgadas
+  units = "in",
+  dpi = 300,        # Resolución alta
+  bg = "white"      # Asegura fondo blanco en el PNG
+)
 
 
 # 2. Creo función unificada de recorte urbano (Intersección + Área)
@@ -216,12 +267,6 @@ escolaridad  <- recortar_urbano(escolaridad, planta_urbana)
 empleo       <- recortar_urbano(empleo, planta_urbana)
 cober_salud  <- recortar_urbano(cober_salud, planta_urbana)
 hacinamiento <- recortar_urbano(hacinamiento, planta_urbana)
-
-plot(st_geometry(planta_urbana), border = "red", lwd = 2)
-plot(st_geometry(hacinamiento), add = TRUE, col = "lightblue")
-
-plot(st_geometry(hacinamiento), col = "lightblue")
-
 
 
 geo_gchu <- "https://geo.gualeguaychu.gov.ar/geoserver/wms"
@@ -469,33 +514,53 @@ ivs_tabla <- ivs_tabla %>%
     )
   )
 
+ivs_tabla$IVS
 
-# Armo un mapa de los radios urbanos
+# Armamos cartografía del Indice de vulnerabilidad social
 
-mapa_1 <- ggplot(ivs_tabla) +
-  geom_sf(aes(fill = cod_indec), color = "white", linewidth = 0.08,show.legend = F) +
-  #labs() +
-  theme_void() +
-  #labs(title= "Mapa de los 137 radios censales luego del filtro (capa urbana)",
-    #caption= "Fuente: elaboracion propia a partir de los datos obtenidos del SIG de Gualeguaychú.")+
+library(ggplot2)
+library(sf)
+
+ggplot() +
+  # 1. Capa de radios urbanos según categorías de IVS
+  geom_sf(
+    data = ivs_tabla,
+    aes(fill = IVS_cat),
+    color = "white",       # Límite blanco fino para separar radios
+    linewidth = 0.08
+  ) +
+  
+  # 2. Paleta divergente ajustada para Puntajes Z (Invertida)
+  scale_fill_brewer(
+    palette = "RdYlBu",
+    direction = -1,        # Invierte la paleta: Azul = Muy Bajo | Rojo = Muy Alto
+    na.value = "transparent",
+    drop = FALSE
+  ) +
+  
+  # 3. Títulos y Leyenda adaptados al tema
+  labs(
+    fill = NULL,           # Elimina el título genérico de la leyenda
+    title = "Figura 2. Distribución espacial del Índice de Vulnerabilidad Social (IVS)",
+    subtitle = "Categorización por intervalos fijos de Puntaje Z en la planta urbana de Gualeguaychú (N = 137)",
+    caption = "Fuente: Elaboración propia a partir de microdatos del Censo 2022 (INDEC) y la Infraestructura de Datos Espaciales (IDE) del\nMunicipio de Gualeguaychú."
+  ) +
+  
+  # 4. Tema académico
+  theme_minimal() +
   theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", size = 11),
-    legend.title = element_text(size = 10, face = "bold"),
-    legend.text = element_text(size = 9),
-    plot.caption = element_text(hjust = 0), # 0 = Izquierda, 0.5 = Centro, 1 = Derecha
-    plot.caption.position = "plot" 
-  )
-
-
-ggsave(
-  filename = "Resultados/mapa_radios_censales_gchu_1.png",
-  plot = mapa_1,
-  width = 8,        # Ancho en pulgadas
-  height = 6,       # Alto en pulgadas
-  units = "in",
-  dpi = 300,        # Resolución alta
-  bg = "white"      # Asegura fondo blanco en el PNG
-)
+    plot.title = element_text(face = "bold", size = 11, hjust = 0),
+    plot.subtitle = element_text(size = 9, color = "gray30", hjust = 0),
+    plot.caption = element_text(size = 8, color = "gray40", hjust = 0, margin = margin(t = 10)),
+    legend.position = "bottom",
+    legend.text = element_text(size = 8.5),
+    axis.text = element_text(size = 7, color = "gray40"),
+    axis.title = element_blank(),
+    panel.grid = element_line(color = "gray90", linetype = "dashed", linewidth = 0.2)
+  ) +
+  
+  # 5. Guía de la leyenda distribuida horizontalmente en 1 fila
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE))
 
 
 
