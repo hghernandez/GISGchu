@@ -188,15 +188,16 @@ poblacion %>%
   mutate(
     sup_m2 = as.numeric(st_area(.)))%>%
   st_drop_geometry()%>%
-  summarise(tot_area= sum(sup_m2)) %>%
+  summarise(tot_area= sum(sup_m2)/1000000) %>%
   bind_cols(
     poblacion %>%
       st_filter(planta_urbana, .predicate = st_intersects) %>%
         mutate(
         sup_m2 = as.numeric(st_area(.)))%>%
       st_drop_geometry()%>%
-      summarise(tot_area_urb= sum(sup_m2))) %>%
+      summarise(tot_area_urb= sum(sup_m2)/1000000)) %>%
   mutate(porc = tot_area_urb*100/tot_area)
+
 
 # Mapa 1 para dimensionar el area urbana vs el ejido
 
@@ -241,15 +242,15 @@ mapa_1 <- ggplot() +
     panel.background = element_rect(fill = "white", color = NA)
   )
 
-ggsave(
-  filename = "Resultados/mapa_radios_censales_gchu_1_vs_ejido.png",
-  plot = mapa_1,
-  width = 8,        # Ancho en pulgadas
-  height = 6,       # Alto en pulgadas
-  units = "in",
-  dpi = 300,        # Resolución alta
-  bg = "white"      # Asegura fondo blanco en el PNG
-)
+# ggsave(
+#   filename = "Resultados/mapa_radios_censales_gchu_1_vs_ejido.png",
+#   plot = mapa_1,
+#   width = 8,        # Ancho en pulgadas
+#   height = 6,       # Alto en pulgadas
+#   units = "in",
+#   dpi = 300,        # Resolución alta
+#   bg = "white"      # Asegura fondo blanco en el PNG
+# )
 
 
 # 2. Creo función unificada de recorte urbano (Intersección + Área)
@@ -521,7 +522,7 @@ ivs_tabla$IVS
 library(ggplot2)
 library(sf)
 
-ggplot() +
+mapa_2 <- ggplot() +
   # 1. Capa de radios urbanos según categorías de IVS
   geom_sf(
     data = ivs_tabla,
@@ -563,6 +564,136 @@ ggplot() +
   guides(fill = guide_legend(nrow = 1, byrow = TRUE))
 
 
+ggsave(
+  filename = "Resultados/mapa_ivs_pje_z.png",
+  plot = mapa_2,
+  width = 8,        # Ancho en pulgadas
+  height = 6,       # Alto en pulgadas
+  units = "in",
+  dpi = 300,        # Resolución alta
+  bg = "white"      # Asegura fondo blanco en el PNG
+)
+
+ivs_tabla %>%
+  group_by(IVS_cat) %>%
+  summarise(n= n_distinct(cod_indec))
+
+
+# 1. Transformar CRS a WGS84 (EPSG:4326) para compatibilidad con Leaflet
+ivs_leaflet <- ivs_tabla %>% 
+  st_transform(crs = 4326)
+
+# 2. Definir la paleta categórica de 5 niveles con los colores de RdYlBu invertidos
+pal_ivs <- colorFactor(
+  palette = c("#2B83BA", "#ABDDA4", "#FFFFBF", "#FDAE61", "#D7191C"),
+  domain = ivs_leaflet$IVS_cat,
+  ordered = TRUE
+)
+
+# 3. Armar el mapa interactivo
+leaflet(ivs_leaflet) %>%
+  # 1. Base Map: Argenmap Gris (IGN) - Ideal para visualizar datos
+  addTiles(
+    urlTemplate = "https://wms.ign.gob.ar/geoserver/gwc/service/tms/1.0.0/mapabase_gris@EPSG%3A3857@png/{z}/{x}/{-y}.png",
+    options = tileOptions(tms = TRUE, maxZoom = 18),
+    attribution = '<a target="_blank" href="https://www.ign.gob.ar">IGN Argentina</a>',
+    group = "Argenmap Gris"
+  ) %>%
+  
+  # 2. Base Map: OpenStreetMap estándar - Ideal para leer nombres de calles
+  addTiles(
+    group = "Calles (OSM)"
+  ) %>%
+  
+  # Capa de Polígonos de IVS (tu código intacto)
+  addPolygons(
+    fillColor = ~pal_ivs(IVS_cat),
+    fillOpacity = 0.7,
+    weight = 0.8,
+    color = "white",
+    dashArray = "1",
+    highlightOptions = highlightOptions(
+      weight = 2, color = "#000000", dashArray = "", fillOpacity = 0.9, bringToFront = TRUE
+    ),
+    label = ~paste0("Radio Censal: ", cod_indec),
+    popup = ~paste0(
+      "<strong>Radio Censal:</strong> ", cod_indec, "<br>",
+      "<strong>Categoría IVS:</strong> ", IVS_cat, "<br>",
+      "<strong>Puntaje Z IVS:</strong> ", round(IVS, 2)
+    ),
+    group = "IVS por Radio Censal"
+  ) %>%
+  
+  # 3. Control para alternar entre el mapa gris y el de calles
+  addLayersControl(
+    baseGroups = c("Argenmap Gris", "Calles (OSM)"),
+    overlayGroups = c("IVS por Radio Censal"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  addLegend(pal = pal_ivs, values = ~IVS_cat, title = "Nivel de IVS (Puntajes Z)", position = "bottomright", opacity = 0.8) %>%
+  setView(lng = -58.515, lat = -33.008, zoom = 12)
+
+##%######################################################%##
+#                                                          #
+####          Mapeo de las dimensiones del IVS          ####
+#                                                          #
+##%######################################################%##
+
+ivs_dimensiones <- ivs_tabla %>%
+  # Seleccionamos las columnas de identificación y las dimensiones categóricas
+  select(cod_indec, ends_with("_cat"), -matches("^(ivs|IVS)_cat")) %>%
+  
+  # Llevamos las dimensiones a formato largo
+  pivot_longer(
+    cols = ends_with("_cat"),
+    names_to = "dimension",
+    values_to = "categoria"
+  ) %>%
+  
+  # Emprolijamos los nombres de las dimensiones para los títulos del facet
+  mutate(
+    dimension = stringr::str_remove(dimension, "^z_"),       # Quita el prefijo 'z_' si lo tiene
+    dimension = stringr::str_remove(dimension, "_cat$"),      # Quita el sufijo '_cat'
+    dimension = stringr::str_to_title(dimension)              # Pone la primera letra en mayúscula
+  )
+
+
+mapa_3 <- ggplot(ivs_dimensiones) +
+  geom_sf(aes(fill = categoria), color = "white", linewidth = 0.05) +
+  scale_fill_brewer(
+    palette = "RdYlBu",
+    direction = -1,
+    drop = FALSE
+  ) +
+  facet_wrap(~ dimension, ncol = 2) + # Organiza los mapas en columnas
+  labs(
+    fill = NULL,
+    title = "Figura 3. Descomposición del IVS por dimensiones socioespaciales",
+    subtitle = "Categorización por Puntajes Z según dimensión analizada en la planta urbana",
+    caption = "Fuente: Elaboración propia a partir de datos del Censo 2022 (INDEC)."
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 11),
+    plot.subtitle = element_text(size = 9, color = "gray30"),
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 9), # Títulos de cada mapa del facet
+    axis.text = element_blank(),                       # Quita coordenadas para limpiar los mapas pequeños
+    panel.grid = element_blank()
+  ) +
+  guides(fill = guide_legend(nrow = 1))
+
+
+ggsave(
+  filename = "Resultados/mapa_dimensiones_pje_z.png",
+  plot = mapa_3,
+  width = 8,        # Ancho en pulgadas
+  height = 6,       # Alto en pulgadas
+  units = "in",
+  dpi = 300,        # Resolución alta
+  bg = "white"      # Asegura fondo blanco en el PNG
+)
 
 ##%######################################################%##
 #                                                          #
