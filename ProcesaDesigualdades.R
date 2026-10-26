@@ -703,11 +703,12 @@ ggsave(
 
 
 
-# 1. Cálculo de superficie por radio (s_i)
+# 1. Cálculo de superficie y proporción espacial (s_i)
 mapa_ice <- ivs_tabla %>%
   mutate(
     sup_m2 = as.numeric(st_area(.)),
-    s_i = (sup_m2 / sum(sup_m2, na.rm = TRUE)) * 100
+    s_i = (sup_m2 / sum(sup_m2, na.rm = TRUE)) * 100,
+    pct_infra_sintesis = (pct_sin_cloaca + pct_deficit_agua) / 2
   )
 
 # 2. Función para procesar ICEG, ICEA y la curva por dimensión
@@ -720,7 +721,6 @@ procesar_ice_dimension <- function(df_sf, col_conteo, nombre_dim) {
       icea = a_i / s_i,
       diff_pos = ifelse(a_i > s_i, a_i - s_i, 0)
     ) %>%
-    # Ordenar por densidad/ICEA descendente para construir la curva superior
     arrange(desc(icea)) %>%
     mutate(
       s_acum = cumsum(s_i),
@@ -730,15 +730,17 @@ procesar_ice_dimension <- function(df_sf, col_conteo, nombre_dim) {
     )
 }
 
-# 3. Mapeo de dimensiones con sus variables de conteo absoluto
+# 3. Mapeo de dimensiones (Ajustá los valores en rojo a los nombres de tus columnas absolutas o porcentuales base, NO a los puntajes Z)
 variables_conteo <- list(
-  "Educación"      = "pct_nbi_escolaridad", # O la variable con el conteo de casos
-  "Desocupación"   = "pct_desocupacion",
-  "Hacinamiento"   = "pct_hacinamiento",
-  "Salud Pública"  = "pct_sin_cobertura",
-  "Sin Cloacas"    = "pct_sin_cloaca",
-  "Déficit Agua"   = "pct_deficit_agua"
+  "Educación"       = "pct_nbi_escolaridad", 
+  "Empleo"          = "pct_desocupacion",
+  "Hacinamiento"    = "pct_hacinamiento",
+  "Infancia"        = "pct_infancia",
+  "Infraestructura" = "pct_infra_sintesis",
+  "Salud"           = "pct_sin_cobertura"
+ 
 )
+
 
 # 4. Consolidación de datos de Lorenz
 tabla_lorenz_global <- imap_dfr(variables_conteo, ~ {
@@ -750,29 +752,51 @@ etiquetas_iceg <- tabla_lorenz_global %>%
   group_by(dimension) %>%
   summarise(label = paste0("ICEG: ", unique(iceg_val)))
 
-# 5. Gráfico multi-panel de Curvas de Lorenz (Estilo Buzai)
-ggplot(tabla_lorenz_global, aes(x = s_acum, y = a_acum)) +
-  geom_ribbon(aes(ymin = s_acum, ymax = a_acum), fill = "#3182bd", alpha = 0.5) +
-  geom_line(color = "#08519c", linewidth = 0.9) +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey30") +
-  geom_text(data = etiquetas_iceg, aes(x = 25, y = 85, label = label), 
-            fontface = "bold", size = 3.8, color = "black") +
+# 5. Gráfico multi-panel estandarizado
+figura_4 <- ggplot(tabla_lorenz_global, aes(x = s_acum, y = a_acum)) +
+  # Área de concentración (sombreado)
+  geom_ribbon(aes(ymin = s_acum, ymax = a_acum), fill = "#d73027", alpha = 0.2) + # Tono rojizo tenue acorde a la paleta RdYlBu
+  # Curva de Lorenz espacial
+  geom_line(color = "#d73027", linewidth = 0.8) +
+  # Línea de equidistribución
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50", linewidth = 0.5) +
+  
+  # Etiqueta del ICEG reubicada
+  geom_text(data = etiquetas_iceg, aes(x = 35, y = 85, label = label), 
+            fontface = "bold", size = 3.5, color = "gray20") +
+  
   facet_wrap(~ dimension, ncol = 3) +
-  scale_x_continuous(limits = c(0, 100), expand = c(0,0)) +
-  scale_y_continuous(limits = c(0, 100), expand = c(0,0)) +
+  scale_x_continuous(limits = c(0, 100), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +
   labs(
-    title = "Figura. Curvas de concentración de Lorenz por Dimensión",
-    subtitle = "Gualeguaychú - Censo 2022 | Adaptado de Metodología Buzai",
-    x = "Superficie (%)",
-    y = "Dimensión (% Acumulado)",
-    caption = "Facultad de Bromatología - UNER"
+    title = "Figura 4. Curvas de concentración espacial (Lorenz) por dimensiones",
+    subtitle = "Distribución territorial acumulada de la vulnerabilidad socioespacial (N = 137)",
+    x = "Superficie Acumulada (%)",
+    y = "Población/Dimensión Acumulada (%)",
+    caption = "Fuente: Elaboración propia a partir de datos del Censo 2022 (INDEC)."
   ) +
-  theme_bw() +
+  theme_minimal() +
   theme(
-    strip.background = element_rect(fill = "grey90"),
-    strip.text = element_text(face = "bold"),
-    panel.grid.minor = element_blank()
+    plot.title = element_text(face = "bold", size = 11, hjust = 0),
+    plot.subtitle = element_text(size = 9, color = "gray30", hjust = 0),
+    plot.caption = element_text(size = 8, color = "gray40", hjust = 0, margin = margin(t = 15)),
+    strip.text = element_text(face = "bold", size = 9.5), # Títulos de cada panel limpios, sin fondo
+    axis.title = element_text(size = 9, color = "gray20"),
+    axis.text = element_text(size = 8, color = "gray50"),
+    panel.grid.major = element_line(color = "gray90", linewidth = 0.3),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "gray80", fill = NA, linewidth = 0.5) # Borde sutil para contener cada gráfico
   )
+
+ggsave(
+  filename = "Resultados/figura4_curvas_lorenz.png", # Nombre corregido
+  plot = figura_4,                             # Asegurate de llamar al objeto ggplot de Lorenz
+  width = 10,       # Un poco más ancho para acomodar las 3 columnas
+  height = 6,       # Alto estándar
+  units = "in",
+  dpi = 300,        # Calidad óptima para revista científica
+  bg = "white"      # Fundamental para que theme_minimal() no quede transparente
+)
 
 
 library(dplyr)
