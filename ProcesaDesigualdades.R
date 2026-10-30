@@ -800,6 +800,7 @@ ggsave(
 
 
 library(dplyr)
+library(flextable)
 
 # Cálculo de la concentración acumulada al 20% y 50% de superficie para Gualeguaychú
 cuadro2_gchu <- tabla_lorenz_global %>%
@@ -807,9 +808,21 @@ cuadro2_gchu <- tabla_lorenz_global %>%
   summarise(
     `20% Superficie` = paste0(round(approx(s_acum, a_acum, xout = 20)$y, 2), "%"),
     `50% Superficie` = paste0(round(approx(s_acum, a_acum, xout = 50)$y, 2), "%")
-  )
+  ) %>%
+  rename(`Dimensión` = dimension) # Pone la mayúscula y el tilde para la tabla final
 
 print(cuadro2_gchu)
+
+
+# 2. Creación y formateo de la tabla académica
+tabla_academica <- flextable(cuadro2_gchu) %>%
+  theme_booktabs() %>% # Aplica el estilo académico clásico (solo líneas horizontales)
+  set_caption(caption = "Tabla 1. Concentración espacial acumulada por dimensión al 20% y 50% de la superficie urbana. Gualeguaychú, Censo 2022.") %>%
+  align(j = 2:3, align = "center", part = "all") %>% # Centra los porcentajes
+  bold(part = "header") %>% # Pone los títulos de columna en negrita
+  font(fontname = "Arial", part = "all") %>% # Usa Arial para que coincida con Google Docs
+  fontsize(size = 11, part = "all") %>%
+  autofit() # Ajusta automáticamente el ancho de las columnas al texto
 
 
 #Correlacion espacial
