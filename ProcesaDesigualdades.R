@@ -685,15 +685,15 @@ mapa_3 <- ggplot(ivs_dimensiones) +
   guides(fill = guide_legend(nrow = 1))
 
 
-ggsave(
-  filename = "Resultados/mapa_dimensiones_pje_z.png",
-  plot = mapa_3,
-  width = 8,        # Ancho en pulgadas
-  height = 6,       # Alto en pulgadas
-  units = "in",
-  dpi = 300,        # Resolución alta
-  bg = "white"      # Asegura fondo blanco en el PNG
-)
+# ggsave(
+#   filename = "Resultados/mapa_dimensiones_pje_z.png",
+#   plot = mapa_3,
+#   width = 8,        # Ancho en pulgadas
+#   height = 6,       # Alto en pulgadas
+#   units = "in",
+#   dpi = 300,        # Resolución alta
+#   bg = "white"      # Asegura fondo blanco en el PNG
+# )
 
 ##%######################################################%##
 #                                                          #
@@ -788,15 +788,15 @@ figura_4 <- ggplot(tabla_lorenz_global, aes(x = s_acum, y = a_acum)) +
     panel.border = element_rect(color = "gray80", fill = NA, linewidth = 0.5) # Borde sutil para contener cada gráfico
   )
 
-ggsave(
-  filename = "Resultados/figura4_curvas_lorenz.png", # Nombre corregido
-  plot = figura_4,                             # Asegurate de llamar al objeto ggplot de Lorenz
-  width = 10,       # Un poco más ancho para acomodar las 3 columnas
-  height = 6,       # Alto estándar
-  units = "in",
-  dpi = 300,        # Calidad óptima para revista científica
-  bg = "white"      # Fundamental para que theme_minimal() no quede transparente
-)
+# ggsave(
+#   filename = "Resultados/figura4_curvas_lorenz.png", # Nombre corregido
+#   plot = figura_4,                             # Asegurate de llamar al objeto ggplot de Lorenz
+#   width = 10,       # Un poco más ancho para acomodar las 3 columnas
+#   height = 6,       # Alto estándar
+#   units = "in",
+#   dpi = 300,        # Calidad óptima para revista científica
+#   bg = "white"      # Fundamental para que theme_minimal() no quede transparente
+# )
 
 
 library(dplyr)
@@ -810,6 +810,7 @@ cuadro2_gchu <- tabla_lorenz_global %>%
     `50% Superficie` = paste0(round(approx(s_acum, a_acum, xout = 50)$y, 2), "%")
   ) %>%
   rename(`Dimensión` = dimension) # Pone la mayúscula y el tilde para la tabla final
+
 
 print(cuadro2_gchu)
 
@@ -870,6 +871,65 @@ centroides_sf <- st_transform(centroides_proyectados, 4326)
 lineas_vecindad <- nb2lines(vecinos, coords = st_coordinates(centroides_sf), as_sf = TRUE)
 lineas_vecindad <- st_set_crs(lineas_vecindad, 4326)
 
+# 3. Mapeo estático con ggplot2
+# Definimos la paleta de colores estándar para mapas LISA
+colores_lisa <- c(
+  "Alto-Alto" = "#d7191c",        # Rojo (Clúster de alta vulnerabilidad)
+  "Bajo-Bajo" = "#2b83ba",        # Azul (Clúster de baja vulnerabilidad)
+  "Alto-Bajo" = "#fdae61",        # Naranja (Anomalía espacial)
+  "Bajo-Alto" = "#abdda4",        # Celeste/Verde claro (Anomalía espacial)
+  "No significativo" = "#f0f0f0"  # Gris muy claro
+)
+
+mapa_lisa <- ggplot(data = ivs_lisa) +
+  geom_sf(aes(fill = cluster), color = "gray40", linewidth = 0.2) +
+  scale_fill_manual(
+    values = colores_lisa,
+    name = "Autocorrelación Local (LISA)",
+    drop = FALSE # Mantiene todos los ítems en la leyenda aunque no haya casos
+  ) +
+  labs(
+    title = "Figura 5. Autocorrelación Espacial Local (LISA) de la Vulnerabilidad Socioespacial",
+    subtitle = "Índice de Vulnerabilidad Socioespacial Global (IVS). Gualeguaychú, 2022.",
+    caption = "Fuente: Elaboración propia a partir de datos del Censo 2022 (INDEC)."
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0),
+    plot.subtitle = element_text(size = 10, color = "gray30", hjust = 0),
+    plot.caption = element_text(size = 8, color = "gray50", hjust = 0, margin = margin(t = 15)),
+    legend.position = "right",
+    legend.title = element_text(face = "bold", size = 9),
+    legend.text = element_text(size = 8),
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank()
+  )
+
+# Mostrar mapa
+mapa_lisa
+
+
+ggsave(
+  filename = "Resultados/figura5_mapa_lisa.png",
+  plot = mapa_lisa,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+
+
+
+
+
+
+
+
+
 # 5. Paletas cromáticas
 pal_lisa <- leaflet::colorFactor(
   palette = c(
@@ -889,10 +949,14 @@ columnas_q <- names(ivs_lisa_4326)[grep("_quintil$", names(ivs_lisa_4326))]
 
 # 7. Ensamblado del Mapa Interactivo
 mapa_completo <- leaflet() %>%
+  # 1. Capa base de OpenStreetMap (Ideal para ver calles y detalles urbanos)
+  addTiles(group = "OpenStreetMap") %>%
+  
+  # 2. Capa base de Argenmap Gris (La original, ideal para la estética limpia)
   addTiles(
     urlTemplate = "https://wms.ign.gob.ar/geoserver/gwc/service/tms/1.0.0/mapabase_gris@EPSG%3A3857@png/{z}/{x}/{-y}.png",
     options = tileOptions(tms = TRUE, maxZoom = 18),
-    group = "Argenmap Base"
+    group = "Argenmap Gris"
   ) %>%
   
   # Capa Polígonos LISA
@@ -904,7 +968,10 @@ mapa_completo <- leaflet() %>%
     weight = 1,
     popup = ~paste0("<b>Radio: </b>", cod_indec, "<br><b>Clúster LISA: </b>", cluster),
     group = "Clusters LISA"
-  ) %>% addPolylines(
+  ) %>% 
+  
+  # Líneas de vecindad
+  addPolylines(
     data = lineas_vecindad,
     color = "#333333",
     weight = 1.2,
@@ -912,6 +979,8 @@ mapa_completo <- leaflet() %>%
     dashArray = "3,3",
     group = "Red de Vecindad (W)"
   ) %>%
+  
+  # Centroides
   addCircleMarkers(
     data = centroides_sf,
     radius = 4,
@@ -922,46 +991,15 @@ mapa_completo <- leaflet() %>%
     popup = ~paste0("<b>Centroide Radio: </b>", cod_indec),
     group = "Nodos (Centroides)"
   ) %>%
+  
+  # Control de capas actualizado
   addLayersControl(
-    baseGroups = c("Argenmap Base"),
+    baseGroups = c("OpenStreetMap", "Argenmap Gris"), # Ahora podés elegir entre ambas
     overlayGroups = c("Clusters LISA", "Red de Vecindad (W)", "Nodos (Centroides)"),
-    options = layersControlOptions(collapsed = TRUE)
+    options = layersControlOptions(collapsed = FALSE) # Lo dejé desplegado para que lo veas fácil
   ) %>%
   setView(lng = -58.515, lat = -33.008, zoom = 12)
 
+# Mostrar mapa
 mapa_completo
 
-
-names(ivs_tabla)
-
-# Armo los mapas para las dimensiones
-
-dimensiones <- c("z_educacion_cat","z_empleo_cat","z_hacinamiento_cat","z_salud_cat",
-                 "z_infancia_cat" ,"z_infraestructura_cat","IVS_cat")
-
-names <- c("Educacion","Empleo","Hacinamiento","Salud","Infancia","Infraestructura","IVS")
-
-mapas <- list()
-
-
-for (d in 1:length(dimensiones)){
-print(d)
-  
-mapas[[d]] <- ggplot(ivs_tabla) +
-  geom_sf(aes(fill = .data[[dimensiones[d]]]), color = "white", linewidth = 0.08) +
-  scale_fill_brewer(
-    palette = "YlOrRd", # Paleta ColorBrewer: Amarillo (Q1) -> Naranja -> Rojo (Q5)
-    direction = 1,
-    name = names[d],
-    drop = FALSE
-  ) +
-  #labs(title = titulo) +
-  theme_void() +
-  theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", size = 11),
-    legend.title = element_text(size = 10, face = "bold"),
-    legend.text = element_text(size = 9)
-  )
-}
-
-mapas[[7]]
